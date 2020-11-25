@@ -8,26 +8,12 @@ import { find, includes, get, hasIn, compact, uniq } from 'lodash';
  */
 import { addQueryArgs } from '@wordpress/url';
 import deprecated from '@wordpress/deprecated';
-import { controls } from '@wordpress/data';
-import { apiFetch } from '@wordpress/data-controls';
-/**
- * Internal dependencies
- */
-import { regularFetch } from './controls';
+import { createRegistryAction } from '@wordpress/data';
+import apiFetch from '@wordpress/api-fetch';
 
 /**
  * Internal dependencies
  */
-import {
-	receiveUserQuery,
-	receiveCurrentTheme,
-	receiveCurrentUser,
-	receiveEntityRecords,
-	receiveThemeSupports,
-	receiveEmbedPreview,
-	receiveUserPermission,
-	receiveAutosaves,
-} from './actions';
 import { getKindEntities, DEFAULT_ENTITY_KEY } from './entities';
 import { ifNotResolved, getNormalizedCommaSeparable } from './utils';
 import {
@@ -35,47 +21,45 @@ import {
 	__unstableReleaseStoreLock,
 } from './locks';
 
-const createRegistryAction = ( factory ) => factory();
-
 /**
  * Requests authors from the REST API.
  *
  * @param {Object|undefined} query Optional object of query parameters to
  *                                 include with request.
  */
-export const getAuthors = createRegistryAction( () => {
-	return function* ( query ) {
+export const getAuthors = createRegistryAction(
+	( { dispatch } ) => async ( query ) => {
 		const path = addQueryArgs(
 			'/wp/v2/users/?who=authors&per_page=100',
 			query
 		);
-		const users = yield apiFetch( { path } );
-		yield receiveUserQuery( path, users );
-	};
-} );
+		const users = await apiFetch( { path } );
+		dispatch.receiveUserQuery( path, users );
+	}
+);
 
 /**
  * Temporary approach to resolving editor access to author queries.
  *
  * @param {number} id The author id.
  */
-export const __unstableGetAuthor = createRegistryAction( () => {
-	return function* ( id ) {
+export const __unstableGetAuthor = createRegistryAction(
+	( { dispatch } ) => async ( id ) => {
 		const path = `/wp/v2/users?who=authors&include=${ id }`;
-		const users = yield apiFetch( { path } );
-		yield receiveUserQuery( 'author', users );
-	};
-} );
+		const users = await apiFetch( { path } );
+		dispatch.receiveUserQuery( 'author', users );
+	}
+);
 
 /**
  * Requests the current user from the REST API.
  */
-export const getCurrentUser = createRegistryAction( () => {
-	return function* () {
-		const currentUser = yield apiFetch( { path: '/wp/v2/users/me' } );
-		yield receiveCurrentUser( currentUser );
-	};
-} );
+export const getCurrentUser = createRegistryAction(
+	( { dispatch } ) => async () => {
+		const currentUser = await apiFetch( { path: '/wp/v2/users/me' } );
+		dispatch.receiveCurrentUser( currentUser );
+	}
+);
 
 /**
  * Requests an entity's record from the REST API.
@@ -86,18 +70,20 @@ export const getCurrentUser = createRegistryAction( () => {
  * @param {Object|undefined} query Optional object of query parameters to
  *                                 include with request.
  */
-export const getEntityRecord = createRegistryAction( () => {
-	return function* ( kind, name, key = '', query ) {
-		const entities = yield getKindEntities( kind );
+export const getEntityRecord = createRegistryAction(
+	( { select, dispatch } ) => async ( kind, name, key = '', query ) => {
+		const entities = await dispatch( getKindEntities( kind ) );
 		const entity = find( entities, { kind, name } );
 		if ( ! entity ) {
 			return;
 		}
 
-		const lock = yield* __unstableAcquireStoreLock(
-			'core',
-			[ 'entities', 'data', kind, name, key ],
-			{ exclusive: false }
+		const lock = await dispatch(
+			__unstableAcquireStoreLock(
+				'core',
+				[ 'entities', 'data', kind, name, key ],
+				{ exclusive: false }
+			)
 		);
 		try {
 			if ( query !== undefined && query._fields ) {
@@ -132,28 +118,22 @@ export const getEntityRecord = createRegistryAction( () => {
 				// The resolution cache won't consider query as reusable based on the
 				// fields, so it's tested here, prior to initiating the REST request,
 				// and without causing `getEntityRecords` resolution to occur.
-				const hasRecords = yield controls.select(
-					'core',
-					'hasEntityRecords',
-					kind,
-					name,
-					query
-				);
+				const hasRecords = select.hasEntityRecords( kind, name, query );
 				if ( hasRecords ) {
 					return;
 				}
 			}
 
-			const record = yield apiFetch( { path } );
-			yield receiveEntityRecords( kind, name, record, query );
+			const record = await apiFetch( { path } );
+			await dispatch.receiveEntityRecords( kind, name, record, query );
 		} catch ( error ) {
 			// We need a way to handle and access REST API errors in state
 			// Until then, catching the error ensures the resolver is marked as resolved.
 		} finally {
-			yield* __unstableReleaseStoreLock( lock );
+			await dispatch( __unstableReleaseStoreLock( lock ) );
 		}
-	};
-} );
+	}
+);
 
 /**
  * Requests an entity's record from the REST API.
@@ -178,18 +158,20 @@ export const getEditedEntityRecord = ifNotResolved(
  * @param {string}  name   Entity name.
  * @param {Object?} query  Query Object.
  */
-export const getEntityRecords = createRegistryAction( () => {
-	return function* ( kind, name, query = {} ) {
-		const entities = yield getKindEntities( kind );
+export const getEntityRecords = createRegistryAction(
+	( { dispatch } ) => async ( kind, name, query = {} ) => {
+		const entities = await dispatch( getKindEntities( kind ) );
 		const entity = find( entities, { kind, name } );
 		if ( ! entity ) {
 			return;
 		}
 
-		const lock = yield* __unstableAcquireStoreLock(
-			'core',
-			[ 'entities', 'data', kind, name ],
-			{ exclusive: false }
+		const lock = await dispatch(
+			__unstableAcquireStoreLock(
+				'core',
+				[ 'entities', 'data', kind, name ],
+				{ exclusive: false }
+			)
 		);
 		try {
 			if ( query._fields ) {
@@ -211,7 +193,7 @@ export const getEntityRecords = createRegistryAction( () => {
 				context: 'edit',
 			} );
 
-			let records = Object.values( yield apiFetch( { path } ) );
+			let records = Object.values( await apiFetch( { path } ) );
 			// If we request fields but the result doesn't contain the fields,
 			// explicitely set these fields as "undefined"
 			// that way we consider the query "fullfilled".
@@ -227,7 +209,7 @@ export const getEntityRecords = createRegistryAction( () => {
 				} );
 			}
 
-			yield receiveEntityRecords( kind, name, records, query );
+			await dispatch.receiveEntityRecords( kind, name, records, query );
 			// When requesting all fields, the list of results can be used to
 			// resolve the `getEntityRecord` selector in addition to `getEntityRecords`.
 			// See https://github.com/WordPress/gutenberg/pull/26575
@@ -235,24 +217,24 @@ export const getEntityRecords = createRegistryAction( () => {
 				const key = entity.key || DEFAULT_ENTITY_KEY;
 				for ( const record of records ) {
 					if ( record[ key ] ) {
-						yield {
+						dispatch( {
 							type: 'START_RESOLUTION',
 							selectorName: 'getEntityRecord',
 							args: [ kind, name, record[ key ] ],
-						};
-						yield {
+						} );
+						dispatch( {
 							type: 'FINISH_RESOLUTION',
 							selectorName: 'getEntityRecord',
 							args: [ kind, name, record[ key ] ],
-						};
+						} );
 					}
 				}
 			}
 		} finally {
-			yield* __unstableReleaseStoreLock( lock );
+			await dispatch( __unstableReleaseStoreLock( lock ) );
 		}
-	};
-} );
+	}
+);
 
 getEntityRecords.shouldInvalidate = ( action, kind, name ) => {
 	return (
@@ -266,45 +248,47 @@ getEntityRecords.shouldInvalidate = ( action, kind, name ) => {
 /**
  * Requests the current theme.
  */
-export const getCurrentTheme = createRegistryAction( () => {
-	return function* () {
-		const activeThemes = yield apiFetch( {
+export const getCurrentTheme = createRegistryAction(
+	( { dispatch } ) => async () => {
+		const activeThemes = await apiFetch( {
 			path: '/wp/v2/themes?status=active',
 		} );
-		yield receiveCurrentTheme( activeThemes[ 0 ] );
-	};
-} );
+		return dispatch.receiveCurrentTheme( activeThemes[ 0 ] );
+	}
+);
 
 /**
  * Requests theme supports data from the index.
  */
-export const getThemeSupports = createRegistryAction( () => {
-	return function* () {
-		const activeThemes = yield apiFetch( {
+export const getThemeSupports = createRegistryAction(
+	( { dispatch } ) => async () => {
+		const activeThemes = await apiFetch( {
 			path: '/wp/v2/themes?status=active',
 		} );
-		yield receiveThemeSupports( activeThemes[ 0 ].theme_supports );
-	};
-} );
+		return dispatch.receiveThemeSupports(
+			activeThemes[ 0 ].theme_supports
+		);
+	}
+);
 
 /**
  * Requests a preview from the from the Embed API.
  *
  * @param {string} url   URL to get the preview for.
  */
-export const getEmbedPreview = createRegistryAction( () => {
-	return function* ( url ) {
+export const getEmbedPreview = createRegistryAction(
+	( { dispatch } ) => async ( url ) => {
 		try {
-			const embedProxyResponse = yield apiFetch( {
+			const embedProxyResponse = await apiFetch( {
 				path: addQueryArgs( '/oembed/1.0/proxy', { url } ),
 			} );
-			yield receiveEmbedPreview( url, embedProxyResponse );
+			return dispatch.receiveEmbedPreview( url, embedProxyResponse );
 		} catch ( error ) {
 			// Embed API 404s if the URL cannot be embedded, so we have to catch the error from the apiRequest here.
-			yield receiveEmbedPreview( url, false );
+			return dispatch.receiveEmbedPreview( url, false );
 		}
-	};
-} );
+	}
+);
 
 /**
  * Requests Upload Permissions from the REST API.
@@ -312,14 +296,14 @@ export const getEmbedPreview = createRegistryAction( () => {
  * @deprecated since 5.0. Callers should use the more generic `canUser()` selector instead of
  *            `hasUploadPermissions()`, e.g. `canUser( 'create', 'media' )`.
  */
-export const hasUploadPermissions = createRegistryAction( () => {
-	return function* () {
+export const hasUploadPermissions = createRegistryAction(
+	( { dispatch } ) => async () => {
 		deprecated( "select( 'core' ).hasUploadPermissions()", {
 			alternative: "select( 'core' ).canUser( 'create', 'media' )",
 		} );
-		yield* canUser( 'create', 'media' );
-	};
-} );
+		return dispatch.canUser( 'create', 'media' );
+	}
+);
 
 /**
  * Checks whether the current user can perform the given action on the given
@@ -330,8 +314,8 @@ export const hasUploadPermissions = createRegistryAction( () => {
  * @param {string}  resource REST resource to check, e.g. 'media' or 'posts'.
  * @param {?string} id       ID of the rest resource to check.
  */
-export const canUser = createRegistryAction( () => {
-	return function* ( action, resource, id ) {
+export const canUser = createRegistryAction(
+	( { dispatch } ) => async ( action, resource, id ) => {
 		const methods = {
 			create: 'POST',
 			read: 'GET',
@@ -350,7 +334,7 @@ export const canUser = createRegistryAction( () => {
 
 		let response;
 		try {
-			response = yield apiFetch( {
+			response = await apiFetch( {
 				path,
 				// Ideally this would always be an OPTIONS request, but unfortunately there's
 				// a bug in the REST API which causes the Allow header to not be sent on
@@ -378,9 +362,9 @@ export const canUser = createRegistryAction( () => {
 
 		const key = compact( [ action, resource, id ] ).join( '/' );
 		const isAllowed = includes( allowHeader, method );
-		yield receiveUserPermission( key, isAllowed );
-	};
-} );
+		dispatch.receiveUserPermission( key, isAllowed );
+	}
+);
 
 /**
  * Request autosave data from the REST API.
@@ -388,22 +372,20 @@ export const canUser = createRegistryAction( () => {
  * @param {string} postType The type of the parent post.
  * @param {number} postId   The id of the parent post.
  */
-export const getAutosaves = createRegistryAction( () => {
-	return function* ( postType, postId ) {
-		const { rest_base: restBase } = yield controls.resolveSelect(
-			'core',
-			'getPostType',
+export const getAutosaves = createRegistryAction(
+	( { dispatch, resolveSelect } ) => async ( postType, postId ) => {
+		const { rest_base: restBase } = await resolveSelect.getPostType(
 			postType
 		);
-		const autosaves = yield apiFetch( {
+		const autosaves = await apiFetch( {
 			path: `/wp/v2/${ restBase }/${ postId }/autosaves?context=edit`,
 		} );
 
 		if ( autosaves && autosaves.length ) {
-			yield receiveAutosaves( postId, autosaves );
+			dispatch.receiveAutosaves( postId, autosaves );
 		}
-	};
-} );
+	}
+);
 
 /**
  * Request autosave data from the REST API.
@@ -414,50 +396,50 @@ export const getAutosaves = createRegistryAction( () => {
  * @param {string} postType The type of the parent post.
  * @param {number} postId   The id of the parent post.
  */
-export const getAutosave = createRegistryAction( () => {
-	return function* ( postType, postId ) {
-		yield controls.resolveSelect(
-			'core',
-			'getAutosaves',
-			postType,
-			postId
-		);
-	};
-} );
+export const getAutosave = createRegistryAction(
+	( { resolveSelect } ) => async ( postType, postId ) => {
+		await resolveSelect.getAutosaves( postType, postId );
+	}
+);
 
 /**
  * Retrieve the frontend template used for a given link.
  *
  * @param {string} link  Link.
  */
-export const __experimentalGetTemplateForLink = createRegistryAction( () => {
-	return function* ( link ) {
+export const __experimentalGetTemplateForLink = createRegistryAction(
+	( { dispatch, resolveSelect } ) => async ( link ) => {
 		// Ideally this should be using an apiFetch call
 		// We could potentially do so by adding a "filter" to the `wp_template` end point.
 		// Also it seems the returned object is not a regular REST API post type.
-		const template = yield regularFetch(
-			addQueryArgs( link, {
-				'_wp-find-template': true,
-			} )
-		);
+		const template = await window
+			.fetch(
+				addQueryArgs( link, {
+					'_wp-find-template': true,
+				} )
+			)
+			.then( ( res ) => res.json() )
+			.then( ( res ) => res.data );
 
 		if ( template === null ) {
 			return;
 		}
 
-		yield getEntityRecord( 'postType', 'wp_template', template.id );
-		const record = yield controls.select(
-			'core',
-			'getEntityRecord',
+		const record = await resolveSelect.getEntityRecord(
 			'postType',
 			'wp_template',
 			template.id
 		);
 
 		if ( record ) {
-			yield receiveEntityRecords( 'postType', 'wp_template', [ record ], {
-				'find-template': link,
-			} );
+			dispatch.receiveEntityRecords(
+				'postType',
+				'wp_template',
+				[ record ],
+				{
+					'find-template': link,
+				}
+			);
 		}
-	};
-} );
+	}
+);

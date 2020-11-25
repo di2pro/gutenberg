@@ -2,7 +2,7 @@
  * External dependencies
  */
 import { createStore, applyMiddleware } from 'redux';
-import { flowRight, get, mapValues } from 'lodash';
+import { flowRight, get, mapValues, omit } from 'lodash';
 import combineReducers from 'turbo-combine-reducers';
 import EquivalentKeyMap from 'equivalent-key-map';
 
@@ -90,7 +90,8 @@ export default function createReduxStore( key, options ) {
 					...metadataActions,
 					...options.actions,
 				},
-				store
+				store,
+				registry
 			);
 			let selectors = mapSelectors(
 				{
@@ -115,14 +116,24 @@ export default function createReduxStore( key, options ) {
 					options.resolvers,
 					selectors,
 					store,
+					registry,
 					resolversCache
 				);
 				resolvers = result.resolvers;
 				selectors = result.selectors;
 			}
 
-			const getSelectors = () => selectors;
-			const getActions = () => actions;
+			const getSelectors = () => {
+				const rv = ( s ) => s( store.__unstableOriginalGetState() );
+				Object.assign( rv, selectors );
+				return rv;
+			};
+
+			const getActions = () => {
+				const rv = ( a ) => store.dispatch( a );
+				Object.assign( rv, actions );
+				return rv;
+			};
 
 			// We have some modules monkey-patching the store object
 			// It's wrong to do so but until we refactor all of our effects to controls
@@ -147,6 +158,43 @@ export default function createReduxStore( key, options ) {
 					} );
 				} );
 
+			const getResolveSelectors = () =>
+				mapValues(
+					omit( getSelectors(), [
+						'getIsResolving',
+						'hasStartedResolution',
+						'hasFinishedResolution',
+						'isResolving',
+						'getCachedResolvers',
+					] ),
+					( selector, selectorName ) => {
+						return ( ...args ) => {
+							return new Promise( ( resolve ) => {
+								const hasFinished = () =>
+									selectors.hasFinishedResolution(
+										selectorName,
+										args
+									);
+								const getResult = () =>
+									selector.apply( null, args );
+
+								// trigger the selector (to trigger the resolver)
+								const result = getResult();
+								if ( hasFinished() ) {
+									return resolve( result );
+								}
+
+								const unsubscribe = subscribe( () => {
+									if ( hasFinished() ) {
+										unsubscribe();
+										resolve( getResult() );
+									}
+								} );
+							} );
+						};
+					}
+				);
+
 			// This can be simplified to just { subscribe, getSelectors, getActions }
 			// Once we remove the use function.
 			return {
@@ -156,6 +204,7 @@ export default function createReduxStore( key, options ) {
 				selectors,
 				resolvers,
 				getSelectors,
+				__experimentalGetResolveSelectors: getResolveSelectors,
 				getActions,
 				subscribe,
 			};
@@ -255,11 +304,13 @@ function mapSelectors( selectors, store ) {
  * Maps actions to dispatch from a given store.
  *
  * @param {Object} actions    Actions to register.
- * @param {Object} store      The redux store to which the actions should be mapped.
+ * @param {Object} store      The redux store to which the actions should be bound.
+ * @param {Object} registry   The registry to which the actions should be bound.
  * @return {Object}           Actions mapped to the redux store provided.
  */
-function mapActions( actions, store ) {
+function mapActions( actions, store, registry ) {
 	const createBoundAction = ( action ) => ( ...args ) => {
+		action = mapRegistryAsyncAction( action, store, registry );
 		return Promise.resolve( store.dispatch( action( ...args ) ) );
 	};
 
@@ -274,13 +325,15 @@ function mapActions( actions, store ) {
  * @param {Object} resolvers      Resolvers to register.
  * @param {Object} selectors      The current selectors to be modified.
  * @param {Object} store          The redux store to which the resolvers should be mapped.
+ * @param {Object} registry
  * @param {Object} resolversCache Resolvers Cache.
  */
-function mapResolvers( resolvers, selectors, store, resolversCache ) {
+function mapResolvers( resolvers, selectors, store, registry, resolversCache ) {
 	// The `resolver` can be either a function that does the resolution, or, in more advanced
 	// cases, an object with a `fullfill` method and other optional methods like `isFulfilled`.
 	// Here we normalize the `resolver` function to an object with `fulfill` method.
 	const mappedResolvers = mapValues( resolvers, ( resolver ) => {
+		resolver = mapRegistryAsyncAction( resolver, store, registry );
 		if ( resolver.fulfill ) {
 			return resolver;
 		}
@@ -351,6 +404,18 @@ function mapResolvers( resolvers, selectors, store, resolversCache ) {
 		resolvers: mappedResolvers,
 		selectors: mapValues( selectors, mapSelector ),
 	};
+}
+
+function mapRegistryAsyncAction( action, store, registry ) {
+	if ( action.isRegistryAction && ! action.registryArgs ) {
+		action.registryArgs = {
+			registry,
+			dispatch: store.getActions,
+			select: store.getSelectors,
+			resolveSelect: store.__experimentalGetResolveSelectors,
+		};
+	}
+	return action;
 }
 
 /**
