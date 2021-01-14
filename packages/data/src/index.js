@@ -23,11 +23,7 @@ export { default as useSelect } from './components/use-select';
 export { useDispatch } from './components/use-dispatch';
 export { AsyncModeProvider } from './components/async-mode-provider';
 export { createRegistry } from './registry';
-export {
-	createRegistrySelector,
-	createRegistryControl,
-	createRegistryAction,
-} from './factory';
+export { createRegistrySelector, createRegistryControl } from './factory';
 export { controls } from './controls';
 export { default as createReduxStore } from './redux-store';
 

@@ -17,6 +17,7 @@ import createReduxRoutineMiddleware from '@wordpress/redux-routine';
 import { builtinControls } from '../controls';
 import promise from '../promise-middleware';
 import createResolversCacheMiddleware from '../resolvers-cache-middleware';
+import createThunkMiddleware from './thunk-middleware';
 import metadataReducer from './metadata/reducer';
 import * as metadataSelectors from './metadata/selectors';
 import * as metadataActions from './metadata/actions';
@@ -81,18 +82,34 @@ export default function createReduxStore( key, options ) {
 		name: key,
 		instantiate: ( registry ) => {
 			const reducer = options.reducer;
-			const store = instantiateReduxStore( key, options, registry );
+			const thunkArgs = {
+				registry,
+				get dispatch() {
+					return getActions();
+				},
+				get select() {
+					return getSelectors();
+				},
+				get resolveSelect() {
+					return getResolveSelectors();
+				},
+			};
+
+			const store = instantiateReduxStore(
+				key,
+				options,
+				registry,
+				thunkArgs
+			);
 			const resolversCache = createResolversCache();
 
 			let resolvers;
-			const actions = mapActions(
-				{
-					...metadataActions,
-					...options.actions,
-				},
-				store,
-				registry
+			const actions = mapValues(
+				{ ...metadataActions, ...options.actions },
+				( action ) => ( ...args ) =>
+					Promise.resolve( store.dispatch( action( ...args ) ) )
 			);
+
 			let selectors = mapSelectors(
 				{
 					...mapValues(
@@ -215,15 +232,15 @@ export default function createReduxStore( key, options ) {
 /**
  * Creates a redux store for a namespace.
  *
- * @param {string}         key      Unique namespace identifier.
- * @param {Object}         options  Registered store options, with properties
- *                                  describing reducer, actions, selectors,
- *                                  and resolvers.
+ * @param {string} key      Unique namespace identifier.
+ * @param {Object} options  Registered store options, with properties
+ * describing reducer, actions, selectors,
+ * and resolvers.
  * @param {WPDataRegistry} registry Registry reference.
- *
+ * @param {Object} thunkArgs
  * @return {Object} Newly created redux store.
  */
-function instantiateReduxStore( key, options, registry ) {
+function instantiateReduxStore( key, options, registry, thunkArgs ) {
 	const controls = {
 		...options.controls,
 		...builtinControls,
@@ -237,6 +254,7 @@ function instantiateReduxStore( key, options, registry ) {
 		createResolversCacheMiddleware( registry, key ),
 		promise,
 		createReduxRoutineMiddleware( normalizedControls ),
+		createThunkMiddleware( thunkArgs ),
 	];
 
 	const enhancers = [ applyMiddleware( ...middlewares ) ];
@@ -301,23 +319,6 @@ function mapSelectors( selectors, store ) {
 }
 
 /**
- * Maps actions to dispatch from a given store.
- *
- * @param {Object} actions    Actions to register.
- * @param {Object} store      The redux store to which the actions should be bound.
- * @param {Object} registry   The registry to which the actions should be bound.
- * @return {Object}           Actions mapped to the redux store provided.
- */
-function mapActions( actions, store, registry ) {
-	const createBoundAction = ( action ) => ( ...args ) => {
-		action = mapRegistryAsyncAction( action, store, registry );
-		return Promise.resolve( store.dispatch( action( ...args ) ) );
-	};
-
-	return mapValues( actions, createBoundAction );
-}
-
-/**
  * Returns resolvers with matched selectors for a given namespace.
  * Resolvers are side effects invoked once per argument set of a given selector call,
  * used in ensuring that the data needs for the selector are satisfied.
@@ -333,7 +334,6 @@ function mapResolvers( resolvers, selectors, store, registry, resolversCache ) {
 	// cases, an object with a `fullfill` method and other optional methods like `isFulfilled`.
 	// Here we normalize the `resolver` function to an object with `fulfill` method.
 	const mappedResolvers = mapValues( resolvers, ( resolver ) => {
-		resolver = mapRegistryAsyncAction( resolver, store, registry );
 		if ( resolver.fulfill ) {
 			return resolver;
 		}
@@ -404,18 +404,6 @@ function mapResolvers( resolvers, selectors, store, registry, resolversCache ) {
 		resolvers: mappedResolvers,
 		selectors: mapValues( selectors, mapSelector ),
 	};
-}
-
-function mapRegistryAsyncAction( action, store, registry ) {
-	if ( action.isRegistryAction && ! action.registryArgs ) {
-		action.registryArgs = {
-			registry,
-			dispatch: store.getActions,
-			select: store.getSelectors,
-			resolveSelect: store.__experimentalGetResolveSelectors,
-		};
-	}
-	return action;
 }
 
 /**

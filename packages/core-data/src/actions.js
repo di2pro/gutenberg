@@ -7,7 +7,6 @@ import { v4 as uuid } from 'uuid';
 /**
  * WordPress dependencies
  */
-import { createRegistryAction } from '@wordpress/data';
 import apiFetch from '@wordpress/api-fetch';
 import { addQueryArgs } from '@wordpress/url';
 
@@ -159,62 +158,62 @@ export function receiveEmbedPreview( url, preview ) {
  * @param {string}  recordId          Record ID of the deleted entity.
  * @param {?Object} query             Special query parameters for the DELETE API call.
  */
-export const deleteEntityRecord = createRegistryAction(
-	( { dispatch } ) => async ( kind, name, recordId, query ) => {
-		const entities = await dispatch( getKindEntities( kind ) );
-		const entity = find( entities, { kind, name } );
-		let error;
-		let deletedRecord = false;
-		if ( ! entity ) {
-			return;
-		}
+export const deleteEntityRecord = ( kind, name, recordId, query ) => async ( {
+	dispatch,
+} ) => {
+	const entities = await dispatch( getKindEntities( kind ) );
+	const entity = find( entities, { kind, name } );
+	let error;
+	let deletedRecord = false;
+	if ( ! entity ) {
+		return;
+	}
 
-		const lock = await dispatch(
-			__unstableAcquireStoreLock(
-				'core',
-				[ 'entities', 'data', kind, name, recordId ],
-				{ exclusive: true }
-			)
-		);
+	const lock = await dispatch(
+		__unstableAcquireStoreLock(
+			'core',
+			[ 'entities', 'data', kind, name, recordId ],
+			{ exclusive: true }
+		)
+	);
+	try {
+		dispatch( {
+			type: 'DELETE_ENTITY_RECORD_START',
+			kind,
+			name,
+			recordId,
+		} );
+
 		try {
-			dispatch( {
-				type: 'DELETE_ENTITY_RECORD_START',
-				kind,
-				name,
-				recordId,
-			} );
+			let path = `${ entity.baseURL }/${ recordId }`;
 
-			try {
-				let path = `${ entity.baseURL }/${ recordId }`;
-
-				if ( query ) {
-					path = addQueryArgs( path, query );
-				}
-
-				deletedRecord = await apiFetch( {
-					path,
-					method: 'DELETE',
-				} );
-
-				dispatch( removeItems( kind, name, recordId, true ) );
-			} catch ( _error ) {
-				error = _error;
+			if ( query ) {
+				path = addQueryArgs( path, query );
 			}
 
-			dispatch( {
-				type: 'DELETE_ENTITY_RECORD_FINISH',
-				kind,
-				name,
-				recordId,
-				error,
+			deletedRecord = await apiFetch( {
+				path,
+				method: 'DELETE',
 			} );
 
-			return deletedRecord;
-		} finally {
-			await dispatch( __unstableReleaseStoreLock( lock ) );
+			dispatch( removeItems( kind, name, recordId, true ) );
+		} catch ( _error ) {
+			error = _error;
 		}
+
+		dispatch( {
+			type: 'DELETE_ENTITY_RECORD_FINISH',
+			kind,
+			name,
+			recordId,
+			error,
+		} );
+
+		return deletedRecord;
+	} finally {
+		await dispatch( __unstableReleaseStoreLock( lock ) );
 	}
-);
+};
 
 /**
  * Returns an action object that triggers an
@@ -229,61 +228,61 @@ export const deleteEntityRecord = createRegistryAction(
  *
  * @return {Object} Action object.
  */
-export const editEntityRecord = createRegistryAction(
-	( { select } ) => ( kind, name, recordId, edits, options = {} ) => {
-		const entity = select.getEntity( kind, name );
-		if ( ! entity ) {
-			throw new Error(
-				`The entity being edited (${ kind }, ${ name }) does not have a loaded config.`
-			);
-		}
-		const { transientEdits = {}, mergedEdits = {} } = entity;
-		const record = select.getRawEntityRecord( kind, name, recordId );
-		const editedRecord = select.getEditedEntityRecord(
-			kind,
-			name,
-			recordId
+export const editEntityRecord = (
+	kind,
+	name,
+	recordId,
+	edits,
+	options = {}
+) => ( { select } ) => {
+	const entity = select.getEntity( kind, name );
+	if ( ! entity ) {
+		throw new Error(
+			`The entity being edited (${ kind }, ${ name }) does not have a loaded config.`
 		);
-
-		const edit = {
-			kind,
-			name,
-			recordId,
-			// Clear edits when they are equal to their persisted counterparts
-			// so that the property is not considered dirty.
-			edits: Object.keys( edits ).reduce( ( acc, key ) => {
-				const recordValue = record[ key ];
-				const editedRecordValue = editedRecord[ key ];
-				const value = mergedEdits[ key ]
-					? { ...editedRecordValue, ...edits[ key ] }
-					: edits[ key ];
-				acc[ key ] = isEqual( recordValue, value ) ? undefined : value;
-				return acc;
-			}, {} ),
-			transientEdits,
-		};
-		return {
-			type: 'EDIT_ENTITY_RECORD',
-			...edit,
-			meta: {
-				undo: ! options.undoIgnore && {
-					...edit,
-					// Send the current values for things like the first undo stack entry.
-					edits: Object.keys( edits ).reduce( ( acc, key ) => {
-						acc[ key ] = editedRecord[ key ];
-						return acc;
-					}, {} ),
-				},
-			},
-		};
 	}
-);
+	const { transientEdits = {}, mergedEdits = {} } = entity;
+	const record = select.getRawEntityRecord( kind, name, recordId );
+	const editedRecord = select.getEditedEntityRecord( kind, name, recordId );
+
+	const edit = {
+		kind,
+		name,
+		recordId,
+		// Clear edits when they are equal to their persisted counterparts
+		// so that the property is not considered dirty.
+		edits: Object.keys( edits ).reduce( ( acc, key ) => {
+			const recordValue = record[ key ];
+			const editedRecordValue = editedRecord[ key ];
+			const value = mergedEdits[ key ]
+				? { ...editedRecordValue, ...edits[ key ] }
+				: edits[ key ];
+			acc[ key ] = isEqual( recordValue, value ) ? undefined : value;
+			return acc;
+		}, {} ),
+		transientEdits,
+	};
+	return {
+		type: 'EDIT_ENTITY_RECORD',
+		...edit,
+		meta: {
+			undo: ! options.undoIgnore && {
+				...edit,
+				// Send the current values for things like the first undo stack entry.
+				edits: Object.keys( edits ).reduce( ( acc, key ) => {
+					acc[ key ] = editedRecord[ key ];
+					return acc;
+				}, {} ),
+			},
+		},
+	};
+};
 
 /**
  * Action triggered to undo the last edit to
  * an entity record, if any.
  */
-export const undo = createRegistryAction( ( { select, dispatch } ) => () => {
+export const undo = () => ( { select, dispatch } ) => {
 	const undoEdit = select.getUndoEdit();
 	if ( ! undoEdit ) {
 		return;
@@ -295,13 +294,13 @@ export const undo = createRegistryAction( ( { select, dispatch } ) => () => {
 			isUndo: true,
 		},
 	} );
-} );
+};
 
 /**
  * Action triggered to redo the last undoed
  * edit to an entity record, if any.
  */
-export const redo = createRegistryAction( ( { select, dispatch } ) => () => {
+export const redo = () => ( { select, dispatch } ) => {
 	const redoEdit = select.getRedoEdit();
 	if ( ! redoEdit ) {
 		return;
@@ -313,7 +312,7 @@ export const redo = createRegistryAction( ( { select, dispatch } ) => () => {
 			isRedo: true,
 		},
 	} );
-} );
+};
 
 /**
  * Forces the creation of a new undo level.
@@ -333,93 +332,122 @@ export function __unstableCreateUndoLevel() {
  * @param {Object}  options                    Saving options.
  * @param {boolean} [options.isAutosave=false] Whether this is an autosave.
  */
-export const saveEntityRecord = createRegistryAction(
-	( { select, dispatch } ) => async (
-		kind,
-		name,
-		record,
-		{ isAutosave = false } = { isAutosave: false }
-	) => {
-		const entities = await dispatch( getKindEntities( kind ) );
-		const entity = find( entities, { kind, name } );
-		if ( ! entity ) {
-			return;
-		}
-		const entityIdKey = entity.key || DEFAULT_ENTITY_KEY;
-		const recordId = record[ entityIdKey ];
+export const saveEntityRecord = (
+	kind,
+	name,
+	record,
+	{ isAutosave = false } = { isAutosave: false }
+) => async ( { select, dispatch } ) => {
+	const entities = await dispatch( getKindEntities( kind ) );
+	const entity = find( entities, { kind, name } );
+	if ( ! entity ) {
+		return;
+	}
+	const entityIdKey = entity.key || DEFAULT_ENTITY_KEY;
+	const recordId = record[ entityIdKey ];
 
-		const lock = await dispatch(
-			__unstableAcquireStoreLock(
-				'core',
-				[ 'entities', 'data', kind, name, recordId || uuid() ],
-				{ exclusive: true }
-			)
-		);
-		try {
-			// Evaluate optimized edits.
-			// (Function edits that should be evaluated on save to avoid expensive computations on every edit.)
-			for ( const [ key, value ] of Object.entries( record ) ) {
-				if ( typeof value === 'function' ) {
-					const evaluatedValue = value(
-						select.getEditedEntityRecord( kind, name, recordId )
-					);
-					await dispatch.editEntityRecord(
-						kind,
-						name,
-						recordId,
-						{
-							[ key ]: evaluatedValue,
-						},
-						{ undoIgnore: true }
-					);
-					record[ key ] = evaluatedValue;
-				}
-			}
-
-			dispatch( {
-				type: 'SAVE_ENTITY_RECORD_START',
-				kind,
-				name,
-				recordId,
-				isAutosave,
-			} );
-			let updatedRecord;
-			let error;
-			try {
-				const path = `${ entity.baseURL }${
-					recordId ? '/' + recordId : ''
-				}`;
-				const persistedRecord = select.getRawEntityRecord(
+	const lock = await dispatch(
+		__unstableAcquireStoreLock(
+			'core',
+			[ 'entities', 'data', kind, name, recordId || uuid() ],
+			{ exclusive: true }
+		)
+	);
+	try {
+		// Evaluate optimized edits.
+		// (Function edits that should be evaluated on save to avoid expensive computations on every edit.)
+		for ( const [ key, value ] of Object.entries( record ) ) {
+			if ( typeof value === 'function' ) {
+				const evaluatedValue = value(
+					select.getEditedEntityRecord( kind, name, recordId )
+				);
+				await dispatch.editEntityRecord(
 					kind,
 					name,
-					recordId
+					recordId,
+					{
+						[ key ]: evaluatedValue,
+					},
+					{ undoIgnore: true }
 				);
+				record[ key ] = evaluatedValue;
+			}
+		}
 
-				if ( isAutosave ) {
-					// Most of this autosave logic is very specific to posts.
-					// This is fine for now as it is the only supported autosave,
-					// but ideally this should all be handled in the back end,
-					// so the client just sends and receives objects.
-					const currentUser = select.getCurrentUser();
-					const currentUserId = currentUser
-						? currentUser.id
-						: undefined;
-					const autosavePost = select.getAutosave(
-						persistedRecord.type,
-						persistedRecord.id,
-						currentUserId
-					);
-					// Autosaves need all expected fields to be present.
-					// So we fallback to the previous autosave and then
-					// to the actual persisted entity if the edits don't
-					// have a value.
-					let data = {
+		dispatch( {
+			type: 'SAVE_ENTITY_RECORD_START',
+			kind,
+			name,
+			recordId,
+			isAutosave,
+		} );
+		let updatedRecord;
+		let error;
+		try {
+			const path = `${ entity.baseURL }${
+				recordId ? '/' + recordId : ''
+			}`;
+			const persistedRecord = select.getRawEntityRecord(
+				kind,
+				name,
+				recordId
+			);
+
+			if ( isAutosave ) {
+				// Most of this autosave logic is very specific to posts.
+				// This is fine for now as it is the only supported autosave,
+				// but ideally this should all be handled in the back end,
+				// so the client just sends and receives objects.
+				const currentUser = select.getCurrentUser();
+				const currentUserId = currentUser ? currentUser.id : undefined;
+				const autosavePost = select.getAutosave(
+					persistedRecord.type,
+					persistedRecord.id,
+					currentUserId
+				);
+				// Autosaves need all expected fields to be present.
+				// So we fallback to the previous autosave and then
+				// to the actual persisted entity if the edits don't
+				// have a value.
+				let data = {
+					...persistedRecord,
+					...autosavePost,
+					...record,
+				};
+				data = Object.keys( data ).reduce(
+					( acc, key ) => {
+						if (
+							[ 'title', 'excerpt', 'content' ].includes( key )
+						) {
+							// Edits should be the "raw" attribute values.
+							acc[ key ] = get( data[ key ], 'raw', data[ key ] );
+						}
+						return acc;
+					},
+					{
+						status:
+							data.status === 'auto-draft'
+								? 'draft'
+								: data.status,
+					}
+				);
+				updatedRecord = await apiFetch( {
+					path: `${ path }/autosaves`,
+					method: 'POST',
+					data,
+				} );
+				// An autosave may be processed by the server as a regular save
+				// when its update is requested by the author and the post had
+				// draft or auto-draft status.
+				if ( persistedRecord.id === updatedRecord.id ) {
+					let newRecord = {
 						...persistedRecord,
-						...autosavePost,
-						...record,
+						...data,
+						...updatedRecord,
 					};
-					data = Object.keys( data ).reduce(
+					newRecord = Object.keys( newRecord ).reduce(
 						( acc, key ) => {
+							// These properties are persisted in autosaves.
 							if (
 								[ 'title', 'excerpt', 'content' ].includes(
 									key
@@ -427,126 +455,86 @@ export const saveEntityRecord = createRegistryAction(
 							) {
 								// Edits should be the "raw" attribute values.
 								acc[ key ] = get(
-									data[ key ],
+									newRecord[ key ],
 									'raw',
-									data[ key ]
+									newRecord[ key ]
+								);
+							} else if ( key === 'status' ) {
+								// Status is only persisted in autosaves when going from
+								// "auto-draft" to "draft".
+								acc[ key ] =
+									persistedRecord.status === 'auto-draft' &&
+									newRecord.status === 'draft'
+										? newRecord.status
+										: persistedRecord.status;
+							} else {
+								// These properties are not persisted in autosaves.
+								acc[ key ] = get(
+									persistedRecord[ key ],
+									'raw',
+									persistedRecord[ key ]
 								);
 							}
 							return acc;
 						},
-						{
-							status:
-								data.status === 'auto-draft'
-									? 'draft'
-									: data.status,
-						}
+						{}
 					);
-					updatedRecord = await apiFetch( {
-						path: `${ path }/autosaves`,
-						method: 'POST',
-						data,
-					} );
-					// An autosave may be processed by the server as a regular save
-					// when its update is requested by the author and the post had
-					// draft or auto-draft status.
-					if ( persistedRecord.id === updatedRecord.id ) {
-						let newRecord = {
-							...persistedRecord,
-							...data,
-							...updatedRecord,
-						};
-						newRecord = Object.keys( newRecord ).reduce(
-							( acc, key ) => {
-								// These properties are persisted in autosaves.
-								if (
-									[ 'title', 'excerpt', 'content' ].includes(
-										key
-									)
-								) {
-									// Edits should be the "raw" attribute values.
-									acc[ key ] = get(
-										newRecord[ key ],
-										'raw',
-										newRecord[ key ]
-									);
-								} else if ( key === 'status' ) {
-									// Status is only persisted in autosaves when going from
-									// "auto-draft" to "draft".
-									acc[ key ] =
-										persistedRecord.status ===
-											'auto-draft' &&
-										newRecord.status === 'draft'
-											? newRecord.status
-											: persistedRecord.status;
-								} else {
-									// These properties are not persisted in autosaves.
-									acc[ key ] = get(
-										persistedRecord[ key ],
-										'raw',
-										persistedRecord[ key ]
-									);
-								}
-								return acc;
-							},
-							{}
-						);
-						await dispatch.receiveEntityRecords(
-							kind,
-							name,
-							newRecord,
-							undefined,
-							true
-						);
-					} else {
-						await dispatch.receiveAutosaves(
-							persistedRecord.id,
-							updatedRecord
-						);
-					}
-				} else {
-					let edits = record;
-					if ( entity.__unstablePrePersist ) {
-						edits = {
-							...edits,
-							...entity.__unstablePrePersist(
-								persistedRecord,
-								edits
-							),
-						};
-					}
-
-					updatedRecord = await apiFetch( {
-						path,
-						method: recordId ? 'PUT' : 'POST',
-						data: edits,
-					} );
 					await dispatch.receiveEntityRecords(
 						kind,
 						name,
-						updatedRecord,
+						newRecord,
 						undefined,
-						true,
-						edits
+						true
+					);
+				} else {
+					await dispatch.receiveAutosaves(
+						persistedRecord.id,
+						updatedRecord
 					);
 				}
-			} catch ( _error ) {
-				error = _error;
-			}
-			dispatch( {
-				type: 'SAVE_ENTITY_RECORD_FINISH',
-				kind,
-				name,
-				recordId,
-				error,
-				isAutosave,
-			} );
+			} else {
+				let edits = record;
+				if ( entity.__unstablePrePersist ) {
+					edits = {
+						...edits,
+						...entity.__unstablePrePersist(
+							persistedRecord,
+							edits
+						),
+					};
+				}
 
-			return updatedRecord;
-		} finally {
-			await dispatch( __unstableReleaseStoreLock( lock ) );
+				updatedRecord = await apiFetch( {
+					path,
+					method: recordId ? 'PUT' : 'POST',
+					data: edits,
+				} );
+				await dispatch.receiveEntityRecords(
+					kind,
+					name,
+					updatedRecord,
+					undefined,
+					true,
+					edits
+				);
+			}
+		} catch ( _error ) {
+			error = _error;
 		}
+		dispatch( {
+			type: 'SAVE_ENTITY_RECORD_FINISH',
+			kind,
+			name,
+			recordId,
+			error,
+			isAutosave,
+		} );
+
+		return updatedRecord;
+	} finally {
+		await dispatch( __unstableReleaseStoreLock( lock ) );
 	}
-);
+};
 
 /**
  * Action triggered to save an entity record's edits.
@@ -556,20 +544,21 @@ export const saveEntityRecord = createRegistryAction(
  * @param {Object} recordId ID of the record.
  * @param {Object} options  Saving options.
  */
-export const saveEditedEntityRecord = createRegistryAction(
-	( { select, dispatch } ) => ( kind, name, recordId, options ) => {
-		if ( ! select.hasEditsForEntityRecord( kind, name, recordId ) ) {
-			return;
-		}
-		const edits = select.getEntityRecordNonTransientEdits(
-			kind,
-			name,
-			recordId
-		);
-		const record = { id: recordId, ...edits };
-		dispatch.saveEntityRecord( kind, name, record, options );
+export const saveEditedEntityRecord = ( kind, name, recordId, options ) => ( {
+	select,
+	dispatch,
+} ) => {
+	if ( ! select.hasEditsForEntityRecord( kind, name, recordId ) ) {
+		return;
 	}
-);
+	const edits = select.getEntityRecordNonTransientEdits(
+		kind,
+		name,
+		recordId
+	);
+	const record = { id: recordId, ...edits };
+	dispatch.saveEntityRecord( kind, name, record, options );
+};
 
 /**
  * Returns an action object used in signalling that Upload permissions have been received.
