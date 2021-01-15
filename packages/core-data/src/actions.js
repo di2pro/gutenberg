@@ -7,8 +7,8 @@ import { v4 as uuid } from 'uuid';
 /**
  * WordPress dependencies
  */
-import { controls } from '@wordpress/data';
-import { apiFetch } from '@wordpress/data-controls';
+import { controls, __experimentalCreateBatch, dispatch } from '@wordpress/data';
+import { apiFetch, __unstableAwaitPromise } from '@wordpress/data-controls';
 import { addQueryArgs } from '@wordpress/url';
 
 /**
@@ -20,6 +20,7 @@ import {
 	__unstableAcquireStoreLock,
 	__unstableReleaseStoreLock,
 } from './locks';
+import batchProcessor from './batch-processor';
 
 /**
  * Returns an action object used in signalling that authors have been received.
@@ -329,17 +330,18 @@ export function __unstableCreateUndoLevel() {
 /**
  * Action triggered to save an entity record.
  *
- * @param {string}  kind                       Kind of the received entity.
- * @param {string}  name                       Name of the received entity.
- * @param {Object}  record                     Record to be saved.
- * @param {Object}  options                    Saving options.
+ * @param {string} kind                       Kind of the received entity.
+ * @param {string} name                       Name of the received entity.
+ * @param {Object} record                     Record to be saved.
+ * @param {Object} options                    Saving options.
  * @param {boolean} [options.isAutosave=false] Whether this is an autosave.
+ * @param options.__experimentalBatch
  */
 export function* saveEntityRecord(
 	kind,
 	name,
 	record,
-	{ isAutosave = false } = { isAutosave: false }
+	{ isAutosave = false, __experimentalBatch = null } = {}
 ) {
 	const entities = yield getKindEntities( kind );
 	const entity = find( entities, { kind, name } );
@@ -441,11 +443,18 @@ export function* saveEntityRecord(
 								: data.status,
 					}
 				);
-				updatedRecord = yield apiFetch( {
+				const request = {
 					path: `${ path }/autosaves`,
 					method: 'POST',
 					data,
-				} );
+				};
+				if ( __experimentalBatch ) {
+					updatedRecord = yield __unstableAwaitPromise(
+						__experimentalBatch.add( request )
+					);
+				} else {
+					updatedRecord = yield apiFetch( request );
+				}
 				// An autosave may be processed by the server as a regular save
 				// when its update is requested by the author and the post had
 				// draft or auto-draft status.
@@ -510,12 +519,18 @@ export function* saveEntityRecord(
 						),
 					};
 				}
-
-				updatedRecord = yield apiFetch( {
+				const request = {
 					path,
 					method: recordId ? 'PUT' : 'POST',
 					data: edits,
-				} );
+				};
+				if ( __experimentalBatch ) {
+					updatedRecord = yield __unstableAwaitPromise(
+						__experimentalBatch.add( request )
+					);
+				} else {
+					updatedRecord = yield apiFetch( request );
+				}
 				yield receiveEntityRecords(
 					kind,
 					name,
@@ -541,6 +556,34 @@ export function* saveEntityRecord(
 	} finally {
 		yield* __unstableReleaseStoreLock( lock );
 	}
+}
+
+export function* __experimentalBatchSaveEntityRecords( spec ) {
+	const batch = __experimentalCreateBatch( batchProcessor );
+
+	for ( const { kind, name, recordId, record } of spec ) {
+		if ( recordId ) {
+			dispatch( 'core' ).saveEditedEntityRecord( kind, name, recordId, {
+				__experimentalBatch: batch,
+			} );
+		} else if ( record ) {
+			dispatch( 'core' ).saveEntityRecord( kind, name, record, {
+				__experimentalBatch: batch,
+			} );
+		} else {
+			throw new Error(
+				"saveEntityRecords: 'recordId' or 'record' is required."
+			);
+		}
+	}
+
+	yield __unstableAwaitPromise( batch.waitForSize( spec.length ) );
+
+	const { hasErrors, outputs, errors } = yield __unstableAwaitPromise(
+		batch.process()
+	);
+
+	return { hasErrors, records: outputs, errors };
 }
 
 /**
@@ -571,7 +614,7 @@ export function* saveEditedEntityRecord( kind, name, recordId, options ) {
 		recordId
 	);
 	const record = { id: recordId, ...edits };
-	yield* saveEntityRecord( kind, name, record, options );
+	return yield* saveEntityRecord( kind, name, record, options );
 }
 
 /**
