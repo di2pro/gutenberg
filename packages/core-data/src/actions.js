@@ -7,7 +7,7 @@ import { v4 as uuid } from 'uuid';
 /**
  * WordPress dependencies
  */
-import { controls, __experimentalCreateBatch, dispatch } from '@wordpress/data';
+import { controls, dispatch } from '@wordpress/data';
 import { apiFetch, __unstableAwaitPromise } from '@wordpress/data-controls';
 import { addQueryArgs } from '@wordpress/url';
 
@@ -20,7 +20,7 @@ import {
 	__unstableAcquireStoreLock,
 	__unstableReleaseStoreLock,
 } from './locks';
-import batchProcessor from './batch-processor';
+import { createBatch } from './batch';
 
 /**
  * Returns an action object used in signalling that authors have been received.
@@ -558,32 +558,48 @@ export function* saveEntityRecord(
 	}
 }
 
-export function* __experimentalBatchSaveEntityRecords( spec ) {
-	const batch = __experimentalCreateBatch( batchProcessor );
+export function* __experimentalPerformBatch( requests ) {
+	const batch = createBatch();
 
-	for ( const { kind, name, recordId, record } of spec ) {
-		if ( recordId ) {
-			dispatch( 'core' ).saveEditedEntityRecord( kind, name, recordId, {
+	const api = {
+		saveEntityRecord( kind, name, record, options ) {
+			// TODO: This doesn't select the right registry.
+			return dispatch( 'core' ).saveEntityRecord( kind, name, record, {
+				...options,
 				__experimentalBatch: batch,
 			} );
-		} else if ( record ) {
-			dispatch( 'core' ).saveEntityRecord( kind, name, record, {
-				__experimentalBatch: batch,
-			} );
-		} else {
-			throw new Error(
-				"saveEntityRecords: 'recordId' or 'record' is required."
+		},
+		saveEditedEntityRecord( kind, name, recordId, options ) {
+			// TODO: This doesn't select the right registry.
+			return dispatch( 'core' ).saveEditedEntityRecord(
+				kind,
+				name,
+				recordId,
+				{
+					...options,
+					__experimentalBatch: batch,
+				}
 			);
-		}
-	}
+		},
+		deleteEntityRecord( kind, name, recordId, query, options ) {
+			// TODO: This doesn't select the right registry.
+			return dispatch( 'core' ).deleteEntityRecord( kind, name, query, {
+				...options,
+				__experimentalBatch: batch,
+			} );
+		},
+	};
 
-	yield __unstableAwaitPromise( batch.waitForSize( spec.length ) );
+	const promises = requests.map( ( callback ) => callback( api ) );
 
-	const { hasErrors, outputs, errors } = yield __unstableAwaitPromise(
-		batch.process()
-	);
+	// TODO: Make it so don't need waitForSize().
+	yield __unstableAwaitPromise( batch.waitForSize( requests.length ) );
 
-	return { hasErrors, records: outputs, errors };
+	// TODO: __unstableAwaitPromise() isn't very rungen-ey.
+	yield __unstableAwaitPromise( batch.process() );
+
+	// TODO: __unstableAwaitPromise() isn't very rungen-ey.
+	return yield __unstableAwaitPromise( Promise.all( promises ) );
 }
 
 /**

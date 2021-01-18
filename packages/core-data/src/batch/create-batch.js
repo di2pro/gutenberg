@@ -3,7 +3,12 @@
  */
 import { without, zip } from 'lodash';
 
-export function __experimentalCreateBatch( processor ) {
+/**
+ * Internal dependencies
+ */
+import defaultProcessor from './default-processor';
+
+export default function createBatch( processor = defaultProcessor ) {
 	const queue = [];
 	let listeners = [];
 
@@ -43,17 +48,27 @@ export function __experimentalCreateBatch( processor ) {
 		},
 
 		async process() {
-			const results = await processor(
-				queue.map( ( { input } ) => input )
-			);
+			let results;
 
-			if ( results.length !== queue.length ) {
-				throw new Error(
-					'process: Array returned by processor must be same size as input array.'
+			try {
+				results = await processor(
+					queue.map( ( { input } ) => input )
 				);
+
+				if ( results.length !== queue.length ) {
+					throw new Error(
+						'process: Array returned by processor must be same size as input array.'
+					);
+				}
+			} catch ( error ) {
+				for ( const { reject } of queue ) {
+					reject( error );
+				}
+
+				throw error;
 			}
 
-			let hasErrors = false;
+			let isSuccess = true;
 
 			for ( const [ result, { resolve, reject } ] of zip(
 				results,
@@ -61,17 +76,13 @@ export function __experimentalCreateBatch( processor ) {
 			) ) {
 				if ( result?.error ) {
 					reject( result.error );
-					hasErrors = true;
+					isSuccess = false;
 				} else {
-					resolve( result?.ouptut ?? result );
+					resolve( result?.output ?? result );
 				}
 			}
 
-			return {
-				hasErrors,
-				outputs: results.map( ( { output } ) => output ),
-				errors: results.map( ( { error } ) => error ),
-			};
+			return isSuccess;
 		},
 	};
 }

@@ -123,7 +123,7 @@ export function* saveWidgetArea( widgetAreaId ) {
 	);
 
 	const batchMeta = [];
-	const batchSpec = [];
+	const batchRequests = [];
 	const sidebarWidgetsIds = [];
 	for ( let i = 0; i < widgetsBlocks.length; i++ ) {
 		const block = widgetsBlocks[ i ];
@@ -159,17 +159,16 @@ export function* saveWidgetArea( widgetAreaId ) {
 				continue;
 			}
 
-			batchSpec.push( {
-				kind: 'root',
-				name: 'widget',
-				recordId: widgetId,
-			} );
+			batchRequests.push( ( { saveEditedEntityRecord } ) =>
+				saveEditedEntityRecord( 'root', 'widget', widgetId )
+			);
 		} else {
-			batchSpec.push( {
-				kind: 'root',
-				name: 'widget',
-				record: { ...widget, sidebar: widgetAreaId },
-			} );
+			batchRequests.push( ( { saveEntityRecord } ) =>
+				saveEntityRecord( 'root', 'widget', {
+					...widget,
+					sidebar: widgetAreaId,
+				} )
+			);
 		}
 
 		batchMeta.push( {
@@ -179,24 +178,38 @@ export function* saveWidgetArea( widgetAreaId ) {
 		} );
 	}
 
-	const { hasErrors, records, errors } = yield dispatch(
+	const records = yield dispatch(
 		'core',
-		'__experimentalBatchSaveEntityRecords',
-		batchSpec
+		'__experimentalPerformBatch',
+		batchRequests
 	);
 
-	if ( hasErrors ) {
-		const failedWidgetNames = [];
+	const failedWidgetNames = [];
 
-		for ( let i = 0; i < errors.length; i++ ) {
-			if ( ! errors[ i ] ) {
-				continue;
-			}
+	for ( let i = 0; i < records.length; i++ ) {
+		const widget = records[ i ];
+		const { block, clientId, position } = batchMeta[ i ];
 
-			const { block } = batchMeta[ i ];
+		const error = yield select(
+			'core',
+			'getLastEntitySaveError',
+			'root',
+			'widget',
+			widget.id
+		);
+		if ( error ) {
 			failedWidgetNames.push( block.attributes?.name || block?.name );
 		}
 
+		if ( ! sidebarWidgetsIds[ position ] ) {
+			sidebarWidgetsIds[ position ] = widget.id;
+		}
+		if ( clientId !== widgetIdToClientId[ widget.id ] ) {
+			yield setWidgetIdForClientId( clientId, widget.id );
+		}
+	}
+
+	if ( failedWidgetNames.length ) {
 		throw new Error(
 			sprintf(
 				/* translators: %s: List of widget names */
@@ -204,17 +217,6 @@ export function* saveWidgetArea( widgetAreaId ) {
 				failedWidgetNames.join( ', ' )
 			)
 		);
-	} else {
-		for ( let i = 0; i < records.length; i++ ) {
-			const widget = records[ i ];
-			const { clientId, position } = batchMeta[ i ];
-			if ( ! sidebarWidgetsIds[ position ] ) {
-				sidebarWidgetsIds[ position ] = widget.id;
-			}
-			if ( clientId !== widgetIdToClientId[ widget.id ] ) {
-				yield setWidgetIdForClientId( clientId, widget.id );
-			}
-		}
 	}
 
 	yield dispatch(
