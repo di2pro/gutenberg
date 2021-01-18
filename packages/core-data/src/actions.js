@@ -234,7 +234,7 @@ export const editEntityRecord = (
 	recordId,
 	edits,
 	options = {}
-) => ( { select } ) => {
+) => ( { select, dispatch } ) => {
 	const entity = select.getEntity( kind, name );
 	if ( ! entity ) {
 		throw new Error(
@@ -262,7 +262,7 @@ export const editEntityRecord = (
 		}, {} ),
 		transientEdits,
 	};
-	return {
+	dispatch( {
 		type: 'EDIT_ENTITY_RECORD',
 		...edit,
 		meta: {
@@ -275,7 +275,7 @@ export const editEntityRecord = (
 				}, {} ),
 			},
 		},
-	};
+	} );
 };
 
 /**
