@@ -29,15 +29,16 @@ export class BlockListItem extends Component {
 		this.onLayout = this.onLayout.bind( this );
 
 		this.state = {
-			blockWidth: 0,
+			blockWidth: this.props.blockWidth,
 		};
 	}
 
 	onLayout( { nativeEvent } ) {
 		const { layout } = nativeEvent;
-		const { blockWidth } = this.state;
+		const { blockWidth } = this.props;
+		const layoutWidth = Math.floor( layout.width );
 
-		if ( blockWidth !== layout.width ) {
+		if ( blockWidth !== layoutWidth ) {
 			this.setState( { blockWidth: layout.width } );
 		}
 	}

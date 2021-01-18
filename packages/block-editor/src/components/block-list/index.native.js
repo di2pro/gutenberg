@@ -74,6 +74,12 @@ export class BlockList extends Component {
 		);
 		this.renderEmptyList = this.renderEmptyList.bind( this );
 		this.getExtraData = this.getExtraData.bind( this );
+
+		this.onLayout = this.onLayout.bind( this );
+
+		this.state = {
+			blockWidth: 0,
+		};
 	}
 
 	addBlockToEndOfPost( newBlock ) {
@@ -136,6 +142,18 @@ export class BlockList extends Component {
 			};
 		}
 		return this.extraData;
+	}
+
+	onLayout( { nativeEvent } ) {
+		const { layout } = nativeEvent;
+		const { blockWidth } = this.state;
+		const layoutWidth = Math.floor( layout.width );
+
+		if ( blockWidth !== layoutWidth ) {
+			this.setState( {
+				blockWidth: layoutWidth,
+			} );
+		}
 	}
 
 	render() {
@@ -278,25 +296,29 @@ export class BlockList extends Component {
 			marginVertical = styles.defaultBlock.marginTop,
 			marginHorizontal = styles.defaultBlock.marginLeft,
 		} = this.props;
+		const { blockWidth } = this.state;
 		return (
-			<BlockListItem
-				isStackedHorizontally={ isStackedHorizontally }
-				rootClientId={ rootClientId }
-				clientId={ clientId }
-				parentWidth={ parentWidth }
-				contentResizeMode={ contentResizeMode }
-				contentStyle={ contentStyle }
-				onAddBlock={ onAddBlock }
-				marginVertical={ marginVertical }
-				marginHorizontal={ marginHorizontal }
-				onDeleteBlock={ onDeleteBlock }
-				shouldShowInnerBlockAppender={
-					this.shouldShowInnerBlockAppender
-				}
-				onCaretVerticalPositionChange={
-					this.onCaretVerticalPositionChange
-				}
-			/>
+			<View onLayout={ this.onLayout }>
+				<BlockListItem
+					isStackedHorizontally={ isStackedHorizontally }
+					rootClientId={ rootClientId }
+					clientId={ clientId }
+					parentWidth={ parentWidth }
+					contentResizeMode={ contentResizeMode }
+					contentStyle={ contentStyle }
+					onAddBlock={ onAddBlock }
+					marginVertical={ marginVertical }
+					marginHorizontal={ marginHorizontal }
+					onDeleteBlock={ onDeleteBlock }
+					shouldShowInnerBlockAppender={
+						this.shouldShowInnerBlockAppender
+					}
+					onCaretVerticalPositionChange={
+						this.onCaretVerticalPositionChange
+					}
+					blockWidth={ blockWidth }
+				/>
+			</View>
 		);
 	}
 
